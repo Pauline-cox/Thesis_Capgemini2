@@ -4,14 +4,32 @@ library(lubridate)
 library(forecast)
 library(ggplot2)
 
+
+# ---------- CONFIG ----------
+
+
+# Your existing pipeline (as given)
+raw_data   <- load_and_prepare_data()
+model_data <- prepare_features(raw_data)
+model_data_small <- head(model_data, n = nrow(model_data) / 1)
+
+horizon <- 1
+data <- prepare_target(model_data_small, horizon)
+sets <- split_data(data)
+train_data <- sets$train
+test_data  <- sets$test
+actual     <- test_data$target
+
+# choose seasonality for hourly data (try 24 or 24*7)
+seasonal_period <- 168
+
+# small helper: default operator
+'%||%' <- function(a, b) if (!is.null(a)) a else b
+
+
 # --- sanity check for your schema ---
 stopifnot(all(c("interval", "total_consumption_kWh") %in% names(train_data)))
 
-# choose seasonality for hourly data (try 24 or 24*7)
-seasonal_period <- 24
-
-# small helper: default operator
-`%||%` <- function(a, b) if (!is.null(a)) a else b
 
 # ---------- monthly re-train SARIMA backtest (updates state inside month) ----------
 sarima_monthly_retrain <- function(train_dt, test_dt, horizon,
@@ -50,7 +68,7 @@ sarima_monthly_retrain <- function(train_dt, test_dt, horizon,
       approximation= auto_args$approximation %||% FALSE
     )
     
-    # within the month: rolling origin — update *state* (not parameters) and forecast h-ahead
+    # within the month: rolling origin — update state (not parameters) and forecast h-ahead
     for (j in seq_along(idx_month_test)) {
       t_origin <- ts_month[j]
       y_upto   <- get_series_upto(t_origin)
@@ -75,23 +93,23 @@ pred <- sarima_monthly_retrain(
 )
 t_end   <- Sys.time()
 runtime_sec <- as.numeric(difftime(t_end, t_start, units = "secs"))
-cat(sprintf("Monthly SARIMA backtest runtime: %.2f seconds\n", runtime_sec))
+# cat(sprintf("Monthly SARIMA backtest runtime: %.2f seconds\n", runtime_sec))
 
 
 # ---------- evaluation (MAE, RMSE, MAPE, R2) ----------
 eval_metrics <- function(actual, pred) {
   stopifnot(length(actual) == length(pred))
   ok <- is.finite(actual) & is.finite(pred)
-  
+
   sse <- sum((pred[ok] - actual[ok])^2)
   sst <- sum((actual[ok] - mean(actual[ok]))^2)
   r2  <- if (sst > 0) (1 - sse/sst) else NA_real_
-  
+
   ae   <- abs(pred[ok] - actual[ok])
   rmse <- sqrt(mean((pred[ok] - actual[ok])^2))
   mae  <- mean(ae)
   mape <- mean(ae / pmax(1e-8, abs(actual[ok]))) * 100
-  
+
   data.table(MAE = mae, RMSE = rmse, MAPE = mape, R2 = r2)
 }
 
@@ -99,13 +117,13 @@ metrics <- eval_metrics(actual, pred)
 metrics[, runtime_seconds := runtime_sec]
 print(metrics)
 
-# ---------- plot: Pred vs Actual at the *target* timestamps (colored) ----------
-plot_dt <- data.table(
-  interval_origin = test_data$interval,
-  target_time     = test_data$interval + lubridate::hours(horizon),
-  actual          = actual,
-  pred            = pred
-)
+# ---------- plot: Pred vs Actual at the target timestamps (colored) ----------
+# plot_dt <- data.table(
+#   interval_origin = test_data$interval,
+#   target_time     = test_data$interval + lubridate::hours(horizon),
+#   actual          = actual,
+#   pred            = pred
+# )
 
 gg <- ggplot(plot_dt, aes(x = target_time)) +
   geom_line(aes(y = actual,   color = "Actual"),   linewidth = 0.7) +

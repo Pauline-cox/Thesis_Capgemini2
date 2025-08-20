@@ -16,11 +16,23 @@ raw_data   <- load_and_prepare_data()
 model_data <- prepare_features(raw_data)
 
 # --- Select smaller part for quicker computation in testing ---
+
+# n = total rows
+n <- nrow(model_data)
+
+# second half
+model_data_half2 <- model_data[(floor(n/2) + 1):n]
+
+# check
+print(nrow(model_data_half2))   # should be about half
+head(model_data_half2)
+
+
 model_data_small <- head(model_data, n = nrow(model_data) / 10)
 
 # --- Forecast horizon and split data ---
-horizon <- 1
-data <- prepare_target(model_data_small, horizon)
+horizon <- 24
+data <- prepare_target(model_data, horizon)
 sets <- split_data(data)
 train_data <- sets$train
 test_data  <- sets$test
