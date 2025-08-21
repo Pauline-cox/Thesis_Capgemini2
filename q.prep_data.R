@@ -13,7 +13,7 @@ prepare_target <- function(data, horizon) {
 }
 
 # Split ratio in train and test set
-split_data <- function(data, split_ratio = 0.8) {
+split_data <- function(data, split_ratio = 0.9) {
   n <- nrow(data)
   idx <- floor(n * split_ratio)
   list(train = data[1:idx], test = data[(idx + 1):n])

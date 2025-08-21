@@ -52,7 +52,6 @@ run_sarima_for_horizons <- function(model_data,
     # Plot (build plot_dt here)
     plot_dt <- data.table(
       target_time = test_h$interval + hours(h),
-      actual      = actual_h,
       pred        = pred_h
     )
     gg <- ggplot(plot_dt, aes(x = target_time)) +
@@ -117,11 +116,6 @@ print(sarima_out$metrics)
 print(sarima_out$plots[["1"]])
 print(sarima_out$plots[["24"]])
 print(sarima_out$plots[["168"]])
-
-
-
-# small helper: default operator
-`%||%` <- function(a, b) if (!is.null(a)) a else b
 
 
 # ---------- (1) & (2) & (3): Versnelde monthly re-train SARIMA ----------
@@ -254,21 +248,4 @@ sarima_monthly_retrain <- function(train_dt, test_dt, horizon,
   preds
 }
 
-
-# ---------- evaluation (MAE, RMSE, MAPE, R2) ----------
-eval_metrics <- function(actual, pred) {
-  stopifnot(length(actual) == length(pred))
-  ok <- is.finite(actual) & is.finite(pred)
-  
-  sse <- sum((pred[ok] - actual[ok])^2)
-  sst <- sum((actual[ok] - mean(actual[ok]))^2)
-  r2  <- if (sst > 0) (1 - sse / sst) else NA_real_
-  
-  ae   <- abs(pred[ok] - actual[ok])
-  rmse <- sqrt(mean((pred[ok] - actual[ok])^2))
-  mae  <- mean(ae)
-  mape <- mean(ae / pmax(1e-8, abs(actual[ok]))) * 100
-  
-  data.table(MAE = mae, RMSE = rmse, MAPE = mape, R2 = r2)
-}
 

@@ -181,6 +181,11 @@ load_and_prepare_data <- function() {
     snow = S,
     thunder = O,
     ice = Y
+    
+    # optional:
+    # dew_point = TD,
+    # precipitation_mm_0.1 = RH,
+    # precip_duration_0.1h = DR 
   )]
   
   KNMI_data[, interval := as.POSIXct(sprintf("%s %02d:00:00", YYYYMMDD, HH), format = "%Y%m%d %H:%M:%S")]
