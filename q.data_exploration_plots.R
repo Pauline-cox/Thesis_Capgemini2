@@ -39,6 +39,39 @@ summary_stats_df <- data.frame(
 )
 print(summary_stats_df)
 
+# --- Ts plots of all features ---
+
+dt <- copy(raw_data)
+
+# drop interval and total_consumption_kWh for plotting
+plot_dt <- melt(
+  dt,
+  id.vars = "interval",
+  measure.vars = setdiff(names(dt), c("interval", "total_consumption_kWh")),
+  variable.name = "Variable",
+  value.name = "Value"
+)
+
+# plot 
+p_all_ts <- ggplot(plot_dt, aes(interval, Value)) +
+  geom_line(linewidth = 0.25, color = "skyblue3", na.rm = TRUE) +
+  facet_wrap(~ Variable, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Time Series of Explanatory Variables",
+    x = NULL, y = NULL
+  ) +
+  scale_x_datetime(expand = expansion(mult = c(0.005, 0.02))) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    strip.text = element_text(face = "bold"),
+    panel.grid.major.y = element_line(linewidth = 0.25),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(10, "pt"),
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 8)
+  )
+
 # --- Daily aggregation --- 
 daily_kWh <- hourly_data[, .(daily_kWh = sum(total_consumption_kWh, na.rm = TRUE)), by = date]
 daily_kWh[, month_str  := format(date, "%Y-%m")]
@@ -114,6 +147,8 @@ p_box_hour <- ggplot(hourly_data, aes(x = factor(hour), y = total_consumption_kW
   theme(plot.title = element_text(hjust = 0.5))
 
 # --- Correlation Heatmap ---
+# compute correlation on raw numeric cols
+cor_matrix <- cor(hourly_data[, ..raw_numeric_cols], use = "pairwise.complete.obs")
 
 cor_dt <- as.data.table(as.table(cor_matrix))
 setnames(cor_dt, old = names(cor_dt), new = c("Var1", "Var2", "Correlation"))
@@ -126,6 +161,7 @@ p_corr <- ggplot(cor_dt, aes(x = Var1, y = Var2, fill = Correlation)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         plot.title = element_text(hjust = 0.5))
 
+
 # --- ACF and PACF Plots ---
 
 energy_ts <- ts(hourly_data$total_consumption_kWh, frequency = 24)
@@ -134,8 +170,14 @@ acf(energy_ts, main = "ACF: Hourly Energy", lag.max = 24 * 14) # max lag = two w
 pacf(energy_ts, main = "PACF: Hourly Energy", lag.max = 24 * 14)
 par(mfrow = c(1, 1))
 
+# --- Augmented Dickey-Fuller Test for stationarity ---
+adf_result <- adf.test(energy_ts, alternative = "stationary")
+
+print(adf_result)
+
 # --- Display All Plots ---
 
+print(p_all_ts)
 print(p_hourly_ts)
 print(p_time_series)
 print(p_jan)
@@ -145,3 +187,4 @@ print(p_box_month)
 print(p_box_weekday)
 print(p_box_hour)
 print(p_corr)
+

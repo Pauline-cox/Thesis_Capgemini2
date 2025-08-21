@@ -17,6 +17,9 @@ model_data <- prepare_features(raw_data)
 
 # --- Select smaller part for quicker computation in testing ---
 
+raw_data_copy <- raw_data
+raw_data <- raw_data_copy
+
 # n = total rows
 n <- nrow(model_data)
 

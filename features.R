@@ -5,20 +5,36 @@ prepare_features <- function(data, lags = c(24, 48, 72, 168, 336, 504), rolls = 
   # ---------------- Time-based features --------------------------------------
   engineered_data[, hour := hour(interval)]
   
-  weekdays_list <- c("maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag")
-  weekday_names <- weekdays(engineered_data$date)
+  # Weekday as an ordered factor (English)
+  old_loc <- Sys.getlocale("LC_TIME")
+  Sys.setlocale("LC_TIME", "C")  # "C" locale gives English weekday/month names
   
-  for (day in weekdays_list) {
-    col_name <- paste0("is_", tolower(day))
-    engineered_data[, (col_name) := as.integer(tolower(weekday_names) == day)]
-  }
+  engineered_data[, weekday := factor(
+    weekdays(date),
+    levels = c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"),
+    ordered = TRUE
+  )]
   
+  Sys.setlocale("LC_TIME", old_loc)  # restore original
+  
+  
+  
+  # Weekend + office hours
   engineered_data[, office_hours := as.integer(hour >= 9 & hour <= 17)]
-  engineered_data[, is_weekend := as.integer(tolower(weekdays(date)) %in% c("zaterdag", "zondag"))]
-  engineered_data[, weekday := factor(weekdays(as.Date(interval)))]
+  engineered_data[, is_weekend := as.integer(weekdays(date) %in% c("Saturday", "Sunday"))]
   
+  # Cyclical encoding for hour
   engineered_data[, hour_sin := sin(2 * pi * hour / 24)]
   engineered_data[, hour_cos := cos(2 * pi * hour / 24)]
+  
+  # Month as ordered factor (English)
+  engineered_data[, month := factor(
+    format(date, "%m"),
+    levels = sprintf("%02d", 1:12),
+    labels = c("January","February","March","April","May","June",
+               "July","August","September","October","November","December"),
+    ordered = TRUE
+  )]
   
   # ---------------- Dutch holidays -------------------------------------------
   nl_holidays <- as.Date(c(

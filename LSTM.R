@@ -1,26 +1,16 @@
+# ================================================================
+# LSTM — Monthly Retrain with Explicit XRegs for Multiple Horizons
+# ================================================================
 
-# ---------------- CONFIG ----------------
-timesteps      <- 168
-epochs         <- 80
-batch_size     <- 32
-patience       <- 6
-units1         <- 128
-units2         <- 64
-dropout_rate   <- 0.2
-final_activation <- "linear"
-
-
-# -------- vectorized sequence builder for a contiguous baked slice --------
+# ---------------- Vectorized sequence builder ----------------
 make_seq_block <- function(baked, timesteps) {
   X <- as.matrix(baked[, setdiff(names(baked), "target"), drop = FALSE])
   y <- baked$target
   n <- nrow(baked)
   s <- n - timesteps
   if (s <= 0) {
-    return(list(
-      X = array(0, dim = c(0, timesteps, ncol(X))),
-      y = numeric(0)
-    ))
+    return(list(X = array(0, dim = c(0, timesteps, ncol(X))),
+                y = numeric(0)))
   }
   idx <- matrix(
     rep(seq_len(timesteps), each = s) + rep(0:(s - 1), times = timesteps),
@@ -47,7 +37,7 @@ build_lstm <- function(input_shape,
     compile(optimizer = optimizer_adam(lr), loss = "mse", metrics = "mae")
 }
 
-# --------------- monthly retrain LSTM using explicit xregs ---------------
+# --------------- Core: monthly retrain LSTM ----------------
 lstm_monthly_retrain_xreg <- function(train_dt, test_dt, horizon,
                                       timesteps = 168,
                                       xreg_num, xreg_cat,
@@ -80,19 +70,17 @@ lstm_monthly_retrain_xreg <- function(train_dt, test_dt, horizon,
     tr_rows     <- all_dt[interval <= train_limit]
     if (nrow(tr_rows) < (timesteps + 200)) next
     
-    # contiguous block for month windows
     all_idx   <- match(ts_m, all_dt$interval)
     start_row <- min(all_idx) - timesteps
     end_row   <- max(all_idx) - 1
     if (start_row < 1) next
     slice_rows <- all_dt[start_row:end_row]
     
-    # keep only target + chosen predictors
     keep_cols <- unique(c("target", xreg_num, xreg_cat))
     tr_df <- as.data.frame(tr_rows[, ..keep_cols])
     sl_df <- as.data.frame(slice_rows[, ..keep_cols])
     
-    # recipe on train only (dummy weekday, scale numerics)
+    # Recipe on train only
     rec <- recipe(tr_df) |>
       update_role(target, new_role = "outcome") |>
       update_role(all_of(setdiff(keep_cols, "target")), new_role = "predictor") |>
@@ -100,26 +88,25 @@ lstm_monthly_retrain_xreg <- function(train_dt, test_dt, horizon,
       step_range(all_numeric(), -all_outcomes(), min = 0, max = 1) |>
       prep()
     
+    
     baked_tr <- bake(rec, tr_df)
     baked_sl <- bake(rec, sl_df)
     
-    # target min-max from TRAIN ONLY for inverse transform
+    # Target scaling with TRAIN min-max (for inverse transform)
     tmin <- min(tr_df$target, na.rm = TRUE)
     tmax <- max(tr_df$target, na.rm = TRUE)
     rng  <- if (is.finite(tmax - tmin) && (tmax - tmin) > 1e-8) (tmax - tmin) else 1
-    
     baked_tr$target <- (tr_df$target - tmin) / rng
     baked_sl$target <- (sl_df$target - tmin) / rng
     
-    # sequences from TRAIN
+    # Sequences
     tr <- make_seq_block(baked_tr, timesteps)
     if (length(tr$y) < 64) next
     
-    # train/val split
+    # Train/val split
     n     <- dim(tr$X)[1]
     n_val <- max(1, floor(0.2 * n))
     n_tr  <- n - n_val
-    
     X_tr <- tr$X[1:n_tr, , , drop = FALSE]
     y_tr <- tr$y[1:n_tr]
     X_va <- tr$X[(n_tr + 1):n, , , drop = FALSE]
@@ -133,8 +120,7 @@ lstm_monthly_retrain_xreg <- function(train_dt, test_dt, horizon,
     
     cbs <- list(
       callback_early_stopping(monitor = "val_loss",
-                              patience = patience,
-                              min_delta = 1e-4,
+                              patience = patience, min_delta = 1e-4,
                               restore_best_weights = TRUE),
       callback_reduce_lr_on_plateau(monitor = "val_loss",
                                     factor = 0.5,
@@ -151,20 +137,17 @@ lstm_monthly_retrain_xreg <- function(train_dt, test_dt, horizon,
     invisible(model |> fit(
       x = X_tr, y = y_tr,
       validation_data = list(X_va, y_va),
-      epochs = epochs,
-      batch_size = batch_size,
-      verbose = verbose,   # 0, 1, or 2
-      callbacks = cbs
+      epochs = epochs, batch_size = batch_size,
+      verbose = verbose, callbacks = cbs
     ))
     
-    # sequences for the month (one block)
+    # Month sequences to predict
     sl <- make_seq_block(baked_sl, timesteps)
     if (length(sl$y) == 0) next
     
     yh_norm <- as.numeric(model |> predict(sl$X, verbose = 0))
     yh      <- yh_norm * rng + tmin
     
-    # map to test rows in this month
     end_times <- slice_rows$interval[(timesteps + 1):nrow(slice_rows)]
     mtch <- match(ts_m, end_times)
     ok   <- which(!is.na(mtch))
@@ -174,8 +157,9 @@ lstm_monthly_retrain_xreg <- function(train_dt, test_dt, horizon,
   preds
 }
 
-
-
+# ------------------------------------------------
+# Runner over horizons (uniform logs/plots/outputs)
+# ------------------------------------------------
 run_lstm_for_horizons <- function(model_data, horizons = c(1, 24, 168),
                                   timesteps = 168,
                                   xreg_num, xreg_cat,
@@ -184,20 +168,17 @@ run_lstm_for_horizons <- function(model_data, horizons = c(1, 24, 168),
                                   batch_size = 32, patience = 6,
                                   final_activation = "linear",
                                   verbose = 1) {
-  results <- list()
-  metrics_list <- list()
-  plots <- list()
+  results <- list(); metrics_list <- list(); plots <- list()
   
   for (h in horizons) {
-    cat(sprintf("\n============================= HORIZON = %d =============================\n", h))
-    # Prepare target for this horizon and split
+    cat(sprintf("\n====================== LSTM | H = %d ======================\n", h))
+    
     data_h <- prepare_target(model_data, h)
     sets_h <- split_data(data_h)
     train_h <- sets_h$train
     test_h  <- sets_h$test
     actual_h <- test_h$target
     
-    # Train + predict
     t0 <- Sys.time()
     pred_h <- lstm_monthly_retrain_xreg(
       train_dt = train_h,
@@ -215,13 +196,11 @@ run_lstm_for_horizons <- function(model_data, horizons = c(1, 24, 168),
     t1 <- Sys.time()
     runtime_sec <- as.numeric(difftime(t1, t0, units = "secs"))
     
-    # Metrics
     m <- eval_metrics(actual_h, pred_h)
     m$runtime_seconds <- runtime_sec
     m$horizon <- h
     metrics_list[[as.character(h)]] <- m
     
-    # Plot
     plot_dt <- data.table(
       target_time = test_h$interval + hours(h),
       actual      = actual_h,
@@ -240,48 +219,41 @@ run_lstm_for_horizons <- function(model_data, horizons = c(1, 24, 168),
       theme_minimal()
     plots[[as.character(h)]] <- gg
     
-    # Store raw artifacts
     results[[as.character(h)]] <- list(
-      horizon = h,
-      pred = pred_h,
-      actual = actual_h,
-      test_interval = test_h$interval,
-      metrics = m,
-      plot = gg
+      horizon = h, pred = pred_h, actual = actual_h,
+      test_interval = test_h$interval, metrics = m, plot = gg
     )
     
-    # Memory hygiene between runs
+    cat(sprintf("Done: LSTM | h=%d | MAE=%.3f | RMSE=%.3f | R2=%.3f | %.1fs\n",
+                h, m$MAE, m$RMSE, m$R2, runtime_sec))
     gc()
   }
   
   metrics_tbl <- rbindlist(metrics_list, use.names = TRUE, fill = TRUE)
   setorder(metrics_tbl, horizon)
-  
-  list(
-    results = results,
-    metrics = metrics_tbl,
-    plots   = plots
-  )
+  list(results = results, metrics = metrics_tbl, plots = plots)
 }
 
-# ---------------- RUN IT ----------------
-out <- run_lstm_for_horizons(
+# -------------------- RUN (example) --------------------
+timesteps <- 168
+# when defining your regressors:
+xreg_num <- c("total_occupancy","co2","tempC","humidity","sound","lux",
+              "temperature","global_radiation","wind_speed",
+              "lag_24","lag_72","lag_168","lag_336","rollmean_168",
+              "hour_sin")   # strictly numeric only
+
+xreg_cat <- c("weekday","month","holiday")   # factor/categorical → dummies
+
+lstm_out <- run_lstm_for_horizons(
   model_data = model_data,
   horizons   = c(1, 24, 168),
-  timesteps  = timesteps,     # e.g., 168; try 336 later for longer horizons
+  timesteps  = timesteps,
   xreg_num   = xreg_num,
   xreg_cat   = xreg_cat,
-  units1     = units1, units2 = units2,
-  dropout    = dropout_rate,
-  epochs     = epochs, batch_size = batch_size, patience = patience,
+  units1     = 128, units2 = 64,
+  dropout    = 0.2, epochs = 80, batch_size = 32, patience = 6,
   final_activation = "linear",
   verbose = 1
 )
-
-# Comparison table
-print(out$metrics)
-
-# Show plots one by one
-print(out$plots[["1"]])
-print(out$plots[["24"]])
-print(out$plots[["168"]])
+print(lstm_out$metrics)
+print(lstm_out$plots[["1"]]); print(lstm_out$plots[["24"]]); print(lstm_out$plots[["168"]])
