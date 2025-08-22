@@ -81,15 +81,25 @@ sarima_monthly_retrain <- function(train_dt, test_dt, horizon,
       }
     } else {
       for (j in seq(1L, M, by = horizon)) {
-        y_upto <- c(y_prefix, y_month[seq_len(j)])
+        # Use info up to j-1 (not including j)
+        y_upto <- c(y_prefix, if (j > 1L) y_month[seq_len(j - 1L)] else numeric(0))
         upd <- Arima(ts(y_upto, frequency = seasonal_period), model = fit)
+        
         fc  <- forecast(upd, h = horizon)
         fc_mean <- as.numeric(fc$mean)
-        block_len <- min(horizon, M - j + 1L)
-        rel <- j:(j + block_len - 1L)
-        preds[idx_month_test[rel]] <- fc_mean[1:block_len]
+        
+        block_len <- min(horizon, M - j + 1L)   # number of *future* points we produced
+        # For k in 1..block_len, fc_mean[k] is for time (j + k)
+        # We want pred[t] to equal y[t + h], so t = j + k - h
+        for (k in seq_len(block_len)) {
+          t_rel <- j + k - horizon
+          if (t_rel >= 1L) {
+            preds[idx_month_test[t_rel]] <- fc_mean[k]
+          }
+        }
       }
     }
+    
   }
   
   preds
@@ -137,7 +147,7 @@ run_sarima_for_horizons <- function(model_data,
     metrics_list[[as.character(h)]] <- m
     
     plot_dt <- data.table(
-      target_time = test_h$interval + hours(h),
+      target_time = test_h$interval,
       actual      = actual_h,
       pred        = pred_h
     )
@@ -161,8 +171,8 @@ run_sarima_for_horizons <- function(model_data,
       test_interval = test_h$interval, metrics = m, plot = gg
     )
     
-    cat(sprintf("Done: SARIMA | h=%d | MAE=%.3f | RMSE=%.3f | R2=%.3f | %.1fs\n",
-                h, m$MAE, m$RMSE, m$R2, runtime_sec))
+    cat(sprintf("Done: SARIMA | h=%d | MAPE=%.3f | R2=%.3f | %.1fs\n",
+                h, m$MAPE, m$R2, runtime_sec))
     gc()
   }
   
@@ -174,8 +184,7 @@ run_sarima_for_horizons <- function(model_data,
 # -------------------- RUN (example) --------------------
 sarima_out <- run_sarima_for_horizons(
   model_data      = model_data,
-  #horizons        = c(1, 24, 168),
-  horizons        = c(1),
+  horizons        = c(1, 24, 168),
   seasonal_period = 168
 )
 print(sarima_out$metrics)

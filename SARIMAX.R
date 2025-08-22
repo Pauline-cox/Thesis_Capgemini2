@@ -207,8 +207,8 @@ run_sarimax_for_horizons <- function(model_data,
       test_interval = test_h$interval, metrics = m, plot = gg
     )
     
-    cat(sprintf("Done: SARIMAX | h=%d | MAE=%.3f | RMSE=%.3f | R2=%.3f | %.1fs\n",
-                h, m$MAE, m$RMSE, m$R2, runtime_sec))
+    cat(sprintf("Done: SARIMA | h=%d | MAPE=%.3f | R2=%.3f | %.1fs\n",
+                h, m$MAPE, m$R2, runtime_sec))
     gc()
   }
   
