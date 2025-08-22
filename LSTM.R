@@ -224,8 +224,8 @@ run_lstm_for_horizons <- function(model_data, horizons = c(1, 24, 168),
       test_interval = test_h$interval, metrics = m, plot = gg
     )
     
-    cat(sprintf("Done: LSTM | h=%d | MAE=%.3f | RMSE=%.3f | R2=%.3f | %.1fs\n",
-                h, m$MAE, m$RMSE, m$R2, runtime_sec))
+    cat(sprintf("Done: SARIMA | h=%d | MAPE=%.3f | R2=%.3f | %.1fs\n",
+                h, m$MAPE, m$R2, runtime_sec))
     gc()
   }
   
