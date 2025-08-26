@@ -25,7 +25,7 @@ load_and_prepare_data <- function() {
   
   filtered_sensor_files <- sensor_files[sapply(sensor_files, function(f) {
     ym <- extract_ym_sensor(f)
-    ym %in% names(active_by_month) && substr(ym, 1, 4) %in% c("2023", "2024")
+    ym %in% names(active_by_month) && substr(ym, 1, 4) %in% c("2023", "2024", "2025")
   })]
   
   all_data <- rbindlist(lapply(filtered_sensor_files, function(sensor_file) {
@@ -53,6 +53,8 @@ load_and_prepare_data <- function() {
   }), fill = TRUE)
   
   sensor_data <- all_data
+  sensor_data <- sensor_data[time < as.POSIXct("2025-01-01 00:00:00", tz = "UTC")]
+  
   
   # ---------------- Process occupancy data -----------------------------------
   process_occupancy <- function(sensor_data) {
@@ -136,10 +138,16 @@ load_and_prepare_data <- function() {
   # ---------------- Comfort data (averaged hourly) ----------------------------
   comfort <- sensor_data[
     application %in% c("officesense_comfort_EU868", "officesense_comfort_fw2"),
-    .(time, tempC, humidity, co2, sound, lux)
+    .(time, deviceName, tempC, humidity, co2, sound, lux)
   ]
   comfort[, time := as.POSIXct(time)]
   comfort[, interval := floor_date(time, "hour")]
+  
+  # ---- Remove faulty sensors ----
+  bad_sensors <- c("eui-3432333878377910")
+  comfort <- comfort[!deviceName %in% bad_sensors]
+  
+  # ---- Aggregate to hourly averages (cleaned) ----
   comfort_hourly <- comfort[, .(
     tempC = mean(tempC, na.rm = TRUE),
     humidity = mean(humidity, na.rm = TRUE),
@@ -148,18 +156,19 @@ load_and_prepare_data <- function() {
     lux = mean(lux, na.rm = TRUE)
   ), by = interval]
   
-  # ---------------- Energy data (summed hourly) -------------------------------
-  energy_2023 <- read_excel("Data/Eneco/Kantoorgebouw K20016264_2023_871687460008204791_E (1).xlsx")
-  energy_2024 <- read_excel("Data/Eneco/Kantoorgebouw - K20016264_2024_871687460008204791_E (1).xlsx")
   
-  energy_data <- rbindlist(list(energy_2023, energy_2024), fill = TRUE) %>%
-    mutate(
-      interval = floor_date(`Start Datum`, "hour"),
-      total_consumption_kWh = `Levering Dal` + `Levering Piek`
-    ) %>%
-    group_by(interval) %>%
-    summarise(total_consumption_kWh = sum(total_consumption_kWh, na.rm = TRUE), .groups = "drop") %>%
-    as.data.table()
+  # ---------------- Energy data (summed hourly) -------------------------------
+  # energy_2023 <- read_excel("Data/Eneco/Kantoorgebouw K20016264_2023_871687460008204791_E (1).xlsx")
+  # energy_2024 <- read_excel("Data/Eneco/Kantoorgebouw - K20016264_2024_871687460008204791_E (1).xlsx")
+  # 
+  # energy_data <- rbindlist(list(energy_2023, energy_2024), fill = TRUE) %>%
+  #   mutate(
+  #     interval = floor_date(`Start Datum`, "hour"),
+  #     total_consumption_kWh = `Levering Dal` + `Levering Piek`
+  #   ) %>%
+  #   group_by(interval) %>%
+  #   summarise(total_consumption_kWh = sum(total_consumption_kWh, na.rm = TRUE), .groups = "drop") %>%
+  #   as.data.table()
   
   # ---------------- KNMI data (hourly) ----------------------------------------
   KNMI_raw <- readLines("Data/KNMI.txt")
@@ -192,16 +201,18 @@ load_and_prepare_data <- function() {
   KNMI_data[, c("YYYYMMDD", "HH") := NULL]
   
   # ---------------- Merge all data together -----------------------------------
+  # raw_data <- Reduce(function(x, y) merge(x, y, by = "interval", all = TRUE),
+  #                    list(occupancy_15min, comfort_hourly, energy_data, KNMI_data))
   raw_data <- Reduce(function(x, y) merge(x, y, by = "interval", all = TRUE),
-                     list(occupancy_15min, comfort_hourly, energy_data, KNMI_data))
-  
+                     list(occupancy_15min, comfort_hourly, KNMI_data))
+
   # ---------------- Fill missing values ---------------------------------------
-  setorder(raw_data, interval)
-  cols_to_fill <- setdiff(names(raw_data), "interval")
-  for (col in cols_to_fill) {
-    raw_data[[col]] <- na.locf(raw_data[[col]], na.rm = FALSE)
-    raw_data[[col]] <- na.locf(raw_data[[col]], fromLast = TRUE, na.rm = FALSE)
-  }
-  
-  return(raw_data)
+  # setorder(raw_data, interval)
+  # cols_to_fill <- setdiff(names(raw_data), "interval")
+  # for (col in cols_to_fill) {
+  #   raw_data[[col]] <- na.locf(raw_data[[col]], na.rm = FALSE)
+  #   raw_data[[col]] <- na.locf(raw_data[[col]], fromLast = TRUE, na.rm = FALSE)
+  # }
+  # 
+  # return(raw_data)
 }

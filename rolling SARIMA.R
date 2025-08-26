@@ -7,7 +7,7 @@ suppressPackageStartupMessages({
 })
 
 # ==== 0. Input hourly data ====================================================
-dt <- as.data.table(raw_data)
+dt <- as.data.table(model_data)
 setorder(dt, interval)
 
 # ==== 1. Train/Test split ====================================================
