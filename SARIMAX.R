@@ -145,7 +145,10 @@ sarimax_monthly_retrain_fast <- function(train_dt, test_dt, horizon,
 # ------------------------------------------------
 # Runner over horizons (uniform logs/plots/outputs)
 # ------------------------------------------------
-run_sarimax_for_horizons <- function(model_data,
+# ------------------------------------------------
+# Runner: SARIMAX for ONLY Nov–Dec 2024
+# ------------------------------------------------
+run_sarimax_nov_dec_2024 <- function(model_data,
                                      horizons = c(1, 24, 168),
                                      xreg_cols,
                                      seasonal_period = 168,
@@ -158,14 +161,33 @@ run_sarimax_for_horizons <- function(model_data,
                                      )) {
   results <- list(); metrics_list <- list(); plots <- list()
   
+  # pick dataset tz if present
+  tz_used <- try(lubridate::tz(model_data$interval[1]), silent = TRUE)
+  if (inherits(tz_used, "try-error") || is.null(tz_used) || tz_used == "") tz_used <- "UTC"
+  
+  nov_start <- as.POSIXct("2024-11-01 00:00:00", tz = tz_used)
+  jan_start <- as.POSIXct("2025-01-01 00:00:00", tz = tz_used)
+  
   for (h in horizons) {
-    cat(sprintf("\n==================== SARIMAX | H = %d ====================\n", h))
+    cat(sprintf("\n================= SARIMAX (Nov–Dec 2024) | H = %d =================\n", h))
     
+    # lead(h) target first, then slice by calendar
     data_h <- prepare_target(model_data, h)
-    sets_h <- split_data(data_h)
-    train_h <- sets_h$train
-    test_h  <- sets_h$test
-    actual_h <- test_h$target
+    data_h <- data.table::as.data.table(data_h)
+    
+    train_h <- data_h[interval <  nov_start]
+    test_h  <- data_h[interval >= nov_start & interval < jan_start]
+    
+    if (nrow(test_h) == 0L) {
+      warning(sprintf("No test rows in Nov–Dec 2024 for h=%d. Skipping.", h))
+      next
+    }
+    if (nrow(train_h) == 0L) {
+      warning(sprintf("No training history before Nov 2024 for h=%d. Skipping.", h))
+      next
+    }
+    
+    actual_h <- test_h$target  # may be NA if future actuals not available
     
     t0 <- Sys.time()
     pred_h <- sarimax_monthly_retrain_fast(
@@ -179,27 +201,29 @@ run_sarimax_for_horizons <- function(model_data,
     t1 <- Sys.time()
     runtime_sec <- as.numeric(difftime(t1, t0, units = "secs"))
     
+    # metrics (NA-safe if actuals missing)
     m <- eval_metrics(actual_h, pred_h)
     m$runtime_seconds <- runtime_sec
     m$horizon <- h
     metrics_list[[as.character(h)]] <- m
     
-    plot_dt <- data.table(
-      target_time = test_h$interval + hours(h),
+    # plot (no +hours(h); target already a lead(h))
+    plot_dt <- data.table::data.table(
+      target_time = test_h$interval,
       actual      = actual_h,
       pred        = pred_h
     )
-    gg <- ggplot(plot_dt, aes(x = target_time)) +
-      geom_line(aes(y = actual, color = "Actual"), linewidth = 0.7) +
-      geom_line(aes(y = pred,   color = "Predicted"), linewidth = 0.7, linetype = "dashed") +
-      scale_color_manual(values = c("Actual" = "#1f77b4", "Predicted" = "#d62728")) +
-      labs(
-        title   = sprintf("SARIMAX (monthly retrain, fast) — h = %d, season = %d", h, seasonal_period),
+    gg <- ggplot2::ggplot(plot_dt, ggplot2::aes(x = target_time)) +
+      ggplot2::geom_line(ggplot2::aes(y = actual, color = "Actual"), linewidth = 0.7, na.rm = TRUE) +
+      ggplot2::geom_line(ggplot2::aes(y = pred,   color = "Predicted"), linewidth = 0.7, linetype = "dashed") +
+      ggplot2::scale_color_manual(values = c("Actual" = "#1f77b4", "Predicted" = "#d62728")) +
+      ggplot2::labs(
+        title   = sprintf("SARIMAX — Forecast for Nov–Dec 2024 (h = %d, season = %d)", h, seasonal_period),
         x = "Time (target timestamp)", y = "Energy consumption (kWh)", color = "Series",
         caption = sprintf("MAE=%.2f | RMSE=%.2f | MAPE=%.2f%% | R²=%.3f | Run=%.1fs",
                           m$MAE, m$RMSE, m$MAPE, m$R2, runtime_sec)
       ) +
-      theme_minimal()
+      ggplot2::theme_minimal()
     plots[[as.character(h)]] <- gg
     
     results[[as.character(h)]] <- list(
@@ -207,13 +231,13 @@ run_sarimax_for_horizons <- function(model_data,
       test_interval = test_h$interval, metrics = m, plot = gg
     )
     
-    cat(sprintf("Done: SARIMA | h=%d | MAPE=%.3f | R2=%.3f | %.1fs\n",
-                h, m$MAPE, m$R2, runtime_sec))
+    cat(sprintf("Done: SARIMAX (Nov–Dec 2024) | h=%d | MAE=%.3f | RMSE=%.3f | R2=%.3f | %.1fs\n",
+                h, m$MAE, m$RMSE, m$R2, runtime_sec))
     gc()
   }
   
-  metrics_tbl <- rbindlist(metrics_list, use.names = TRUE, fill = TRUE)
-  setorder(metrics_tbl, horizon)
+  metrics_tbl <- data.table::rbindlist(metrics_list, use.names = TRUE, fill = TRUE)
+  data.table::setorder(metrics_tbl, horizon)
   list(results = results, metrics = metrics_tbl, plots = plots)
 }
 
