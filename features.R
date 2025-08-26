@@ -111,23 +111,23 @@ prepare_features <- function(data, lags = c(24, 48, 72, 168, 336, 504), rolls = 
   
   cleaned_data <- engineered_data[complete.cases(engineered_data[, ..clean_cols])]
   
-  # ---------------- Normalize numeric columns (0 to 1) ------------------------
-  numeric_cols <- names(which(sapply(cleaned_data, is.numeric)))
-  
-  # Optional: exclude 'total_consumption_kWh', date columns, interval if needed
-  exclude_cols <- c("total_consumption_kWh", "YYYYMMDD", "HH", "interval")
-  normalize_cols <- setdiff(numeric_cols, exclude_cols)
-  
-  for (col in normalize_cols) {
-    min_val <- min(cleaned_data[[col]], na.rm = TRUE)
-    max_val <- max(cleaned_data[[col]], na.rm = TRUE)
-    
-    if (max_val != min_val) {
-      cleaned_data[[col]] <- (cleaned_data[[col]] - min_val) / (max_val - min_val)
-    } else {
-      cleaned_data[[col]] <- 0  # If constant column, set to 0
-    }
-  }
+  # # ---------------- Normalize numeric columns (0 to 1) ------------------------
+  # numeric_cols <- names(which(sapply(cleaned_data, is.numeric)))
+  # 
+  # # Optional: exclude 'total_consumption_kWh', date columns, interval if needed
+  # exclude_cols <- c("total_consumption_kWh", "YYYYMMDD", "HH", "interval")
+  # normalize_cols <- setdiff(numeric_cols, exclude_cols)
+  # 
+  # for (col in normalize_cols) {
+  #   min_val <- min(cleaned_data[[col]], na.rm = TRUE)
+  #   max_val <- max(cleaned_data[[col]], na.rm = TRUE)
+  #   
+  #   if (max_val != min_val) {
+  #     cleaned_data[[col]] <- (cleaned_data[[col]] - min_val) / (max_val - min_val)
+  #   } else {
+  #     cleaned_data[[col]] <- 0  # If constant column, set to 0
+  #   }
+  # }
   
   return(cleaned_data)
 }

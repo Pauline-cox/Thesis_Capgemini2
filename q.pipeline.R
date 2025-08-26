@@ -19,7 +19,11 @@ model_data <- prepare_features(raw_data)
 
 raw_data_copy <- raw_data
 raw_data <- raw_data_copy
-
+# Filter raw_data to desired period
+raw_data <- raw_data[
+  interval >= as.POSIXct("2023-05-01 00:00:00", tz = "UTC") &
+    interval <  as.POSIXct("2025-01-01 00:00:00", tz = "UTC")
+]
 # n = total rows
 n <- nrow(model_data)
 
