@@ -7,17 +7,17 @@ library(ggplot2)
 # Target: total_consumption_kWh
 feature_columns <- c(
   # occupancy & indoor environment
-  "total_occupancy", "co2", 
+  "total_occupancy", "co2", "tempC ", "humidity", "sound", "lux",
   
   # external weather
-  "global_radiation", "temperature",
+  "global_radiation", "temperature", "wind_speed", "sunshine_minutes",
   
   # calendar
-  "office_hours", "is_weekend", "holiday", 
+  "office_hours", "is_weekend", "holiday", "month",
   "hour_sin", "hour_cos", "weekday_sin", "weekday_cos",
   
   # lags & rolling stats
-  "lag_24", "lag_168", "rollmean_24", "rollmean_168", "lag_504"
+  "lag_24", "lag_168", "rollmean_24", "rollmean_168", "lag_504", "lag_72", "lag_336"
 )
 
 feature_columns <- intersect(feature_columns, names(model_data))  # keep only existing
@@ -27,10 +27,10 @@ if ("month" %in% names(train_dt)) {
 }
 
 # ==== 1. TRAIN/TEST SPLIT ====================================================
-train_start <- as.POSIXct("2023-05-01 00:00:00", tz="UTC")
+train_start <- as.POSIXct("2023-09-01 00:00:00", tz="UTC")
 train_end   <- as.POSIXct("2024-09-30 23:00:00", tz="UTC")
 test_start  <- as.POSIXct("2024-10-01 00:00:00", tz="UTC")
-test_end    <- as.POSIXct("2024-10-31 23:00:00", tz="UTC")
+test_end    <- as.POSIXct("2024-12-31 23:00:00", tz="UTC")
 
 train_dt <- model_data[interval >= train_start & interval <= train_end]
 test_dt  <- model_data[interval >= test_start & interval <= test_end]
@@ -145,6 +145,7 @@ history <- model %>% fit(
 
 plot(history)
 
+
 # ==== 6. FORECAST (rolling) ==================================================
 lstm_rolling_forecast <- function(model, X_test, y_test, lookback, horizon) {
   n_test <- nrow(X_test)
@@ -194,11 +195,97 @@ cat(sprintf("sMAPE = %.2f%%\n", sMAPE))
 
 # ==== 8. VISUALIZATION =======================================================
 ggplot(res_dt, aes(x = interval)) +
-  geom_line(aes(y = actual, colour="Actual"), size=0.6) +
-  geom_line(aes(y = forecast, colour="Forecast"), size=0.6, alpha=0.8) +
-  labs(title="LSTM Forecast vs Actuals",
-       subtitle=sprintf("Lookback=%dh, Horizon=%dh", lookback, horizon),
-       x="Time", y="kWh") +
-  scale_colour_manual(values=c("Actual"="black", "Forecast"="red")) +
+  geom_line(aes(y = actual, colour = "Actual", linetype = "Actual"), size = 0.5) +
+  geom_line(aes(y = forecast, colour = "Forecast", linetype = "Forecast"), size = 0.6) +
+  labs(
+    title = "Rolling SARIMA Forecast vs Actuals",
+    subtitle = sprintf("Window: %d hours, Steps: %d hours", window_size, rolling_steps),
+    x = "Time", y = "kWh"
+  ) +
+  scale_colour_manual(
+    name = "Legend",
+    values = c("Actual" = "black", "Forecast" = "blue")
+  ) +
+  scale_linetype_manual(
+    name = "Legend",
+    values = c("Actual" = "solid", "Forecast" = "dashed")
+  ) +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+# ==== 7b. RESIDUAL ANALYSIS ===================================================
+library(moments)
+library(tseries)
+
+cat("\n==== LSTM RESIDUAL ANALYSIS ====\n")
+
+# 1. Basic stats
+cat(sprintf("Mean: %.4f\n", mean(res_dt$residual)))
+cat(sprintf("Std Dev: %.4f\n", sd(res_dt$residual)))
+cat(sprintf("Skewness: %.4f\n", skewness(res_dt$residual)))
+cat(sprintf("Kurtosis: %.4f\n", kurtosis(res_dt$residual)))
+
+# 2. Normality tests
+jb_test <- jarque.bera.test(res_dt$residual)
+cat(sprintf("Jarque-Bera: p-value = %.4f\n", jb_test$p.value))
+if (nrow(res_dt) <= 5000) {
+  shapiro <- shapiro.test(res_dt$residual)
+  cat(sprintf("Shapiro-Wilk: p-value = %.4f\n", shapiro$p.value))
+} else {
+  cat("Shapiro-Wilk: Sample too large\n")
+}
+
+# 3. Autocorrelation tests
+lb24 <- Box.test(res_dt$residual, lag=24, type="Ljung-Box")
+lb168 <- Box.test(res_dt$residual, lag=168, type="Ljung-Box")
+cat(sprintf("Ljung-Box (24 lags): p-value = %.4f\n", lb24$p.value))
+cat(sprintf("Ljung-Box (168 lags): p-value = %.4f\n", lb168$p.value))
+
+# 4. Stationarity test
+adf <- adf.test(res_dt$residual)
+cat(sprintf("ADF Test: p-value = %.4f\n", adf$p.value))
+
+# ==== 8b. RESIDUAL VISUALIZATION ==============================================
+# Residual time series
+p1 <- ggplot(res_dt, aes(x = interval, y = residual)) +
+  geom_line(color="steelblue", alpha=0.7) +
+  geom_hline(yintercept=0, linetype="dashed", color="red") +
+  labs(title="LSTM Residuals Over Time", x="Time", y="Residual") +
   theme_minimal()
 
+# Histogram + density
+p2 <- ggplot(res_dt, aes(x = residual)) +
+  geom_histogram(aes(y=..density..), bins=30, fill="steelblue", alpha=0.7) +
+  geom_density(color="darkred", linewidth=1) +
+  stat_function(fun=dnorm, args=list(mean=mean(res_dt$residual),
+                                     sd=sd(res_dt$residual)),
+                color="green", linetype="dashed") +
+  labs(title="LSTM Residual Distribution", x="Residual", y="Density") +
+  theme_minimal()
+
+# Q-Q plot
+p3 <- ggplot(res_dt, aes(sample=residual)) +
+  stat_qq(color="steelblue") + stat_qq_line(color="red") +
+  labs(title="LSTM Residuals Q-Q Plot", x="Theoretical Quantiles", y="Sample Quantiles") +
+  theme_minimal()
+
+# ACF
+acf_data <- acf(res_dt$residual, plot=FALSE)
+acf_df <- data.table(lag=acf_data$lag, acf=acf_data$acf)
+p4 <- ggplot(acf_df, aes(x=lag, y=acf)) +
+  geom_segment(aes(xend=lag, yend=0), color="steelblue") +
+  geom_hline(yintercept=0) +
+  geom_hline(yintercept=c(-1,1)*1.96/sqrt(nrow(res_dt)), linetype="dashed", color="red") +
+  labs(title="ACF of LSTM Residuals", x="Lag", y="ACF") +
+  theme_minimal()
+
+# Residuals vs Forecast
+p5 <- ggplot(res_dt, aes(x=forecast, y=residual)) +
+  geom_point(alpha=0.6, color="steelblue") +
+  geom_hline(yintercept=0, linetype="dashed", color="red") +
+  geom_smooth(method="loess", color="darkgreen") +
+  labs(title="Residuals vs Forecasted Values", x="Forecast", y="Residual") +
+  theme_minimal()
+
+# Print plots
+print(p1); print(p2); print(p3); print(p4); print(p5)
