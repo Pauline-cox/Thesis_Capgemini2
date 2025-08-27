@@ -25,10 +25,10 @@ candidates <- intersect(c(
   "sunshine_minutes","global_radiation","fog","rain","snow","thunder","ice",
   # calendar/engineered
   "hour_sin","hour_cos","is_weekend","office_hours","holiday"
-), names(train_data))
+), names(model_data))
 
 # ---- 1) Build numeric frame on TRAIN ONLY (no leakage) ----
-num_dt <- copy(train_data)[, ..candidates]
+num_dt <- copy(model_data)[, ..candidates]
 
 # keep only numeric columns
 num_cols <- names(which(sapply(num_dt, is.numeric)))
@@ -62,8 +62,8 @@ cat("Top correlations with target (train):\n"); print(head(ranked, 20))
 
 # ---- 4) Greedy de-collinearized pick ----
 keep_min      <- 0.10   # raise to 0.15–0.20 to be stricter
-collinear_max <- 0.80   # max allowed pairwise |corr| among picked
-max_vars      <- 12     # cap total numeric xregs to keep models stable
+collinear_max <- 0.70   # max allowed pairwise |corr| among picked
+max_vars      <- 100     # cap total numeric xregs to keep models stable
 
 picked <- character(0)
 for (v in names(ranked)) {

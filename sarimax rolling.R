@@ -4,6 +4,7 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(lubridate)
   library(tseries)
+  library(moments)
 })
 
 # ==== 0. Input hourly data ====================================================
@@ -23,57 +24,64 @@ y_train <- ts(train_dt$total_consumption_kWh, frequency = 168)
 y_test  <- test_dt$total_consumption_kWh
 h       <- length(y_test)
 
-# ==== 2. ROLLING FORECAST SETUP ==============================================
-window_size <- length(y_train)
-rolling_steps <- 24
+# Choose regressors
+xreg_vars <-   c("total_occupancy","co2","lux","lag_24","global_radiation")
+X_train <- as.matrix(train_dt[, ..xreg_vars])
+X_test  <- as.matrix(test_dt[, ..xreg_vars])
 
-# Pre-allocate results
-all_forecasts <- numeric(0)
-all_actuals <- numeric(0)
+# ==== 2. ROLLING FORECAST SETUP ==============================================
+rolling_steps <- 24
+all_forecasts <- all_actuals <- all_residuals <- numeric(0)
 all_timestamps <- as.POSIXct(character(0))
-all_residuals <- numeric(0)
 model_diagnostics <- list()
 
-# ==== 3. OPTIMIZED ROLLING FORECAST ==========================================
+# ==== 3. ROLLING FORECAST LOOP ===============================================
 start_time <- Sys.time()
 
 for (i in seq(1, h, by = rolling_steps)) {
-  current_end <- i + rolling_steps - 1
-  if (current_end > h) current_end <- h
-  
+  current_end <- min(i + rolling_steps - 1, h)
   cat(sprintf("Forecasting hours %d to %d of %d...\n", i, current_end, h))
   
+  # Slice
   current_test <- y_test[i:current_end]
   current_train <- ts(c(y_train, y_test[0:(i-1)]), frequency = 168)
+  X_train_ext <- rbind(X_train, X_test[0:(i-1), , drop=FALSE])
+  X_test_ext  <- X_test[i:current_end, , drop=FALSE]
   
+  # Fit SARIMAX
   if (i == 1) {
-    fit <- Arima(current_train,
-                 order = c(1,0,1),
-                 seasonal = list(order = c(1,1,1), period = 168),
-                 include.mean = TRUE,
-                 method = "CSS")
+    fit <- Arima(
+      current_train,
+      order = c(1,0,1),
+      seasonal = list(order = c(1,1,1), period = 168),
+      xreg = X_train_ext,
+      include.mean = TRUE,
+      method = "CSS"
+    )
   } else {
-    fit <- Arima(current_train,
-                 order = c(1,0,1),
-                 seasonal = list(order = c(1,1,1), period = 168),
-                 include.mean = TRUE,
-                 method = "CSS",
-                 model = fit)
+    fit <- Arima(
+      current_train,
+      order = c(1,0,1),
+      seasonal = list(order = c(1,1,1), period = 168),
+      xreg = X_train_ext,
+      include.mean = TRUE,
+      method = "CSS",
+      model = fit
+    )
   }
   
-  # print(summary(fit))
-  
-  fc <- forecast(fit, h = rolling_steps)
-  current_forecast <- as.numeric(fc$mean)[1:length(current_test)]
+  # Forecast
+  fc <- forecast(fit, h = length(current_test), xreg = X_test_ext)
+  current_forecast <- as.numeric(fc$mean)
   current_residuals <- current_test - current_forecast
   
-  # Store results
+  # Store
   all_forecasts <- c(all_forecasts, current_forecast)
   all_actuals <- c(all_actuals, current_test)
   all_timestamps <- c(all_timestamps, test_dt$interval[i:current_end])
   all_residuals <- c(all_residuals, current_residuals)
   
-  # Store model diagnostics every 7 days (168 hours)
+  # Diagnostics every 168 hours
   if (i %% 168 == 1) {
     model_diagnostics[[as.character(i)]] <- list(
       iteration = i,
@@ -84,48 +92,37 @@ for (i in seq(1, h, by = rolling_steps)) {
     )
   }
   
+  # Timing info
   elapsed <- as.numeric(Sys.time() - start_time, units = "mins")
-  cat(sprintf("Elapsed: %.1f minutes, Estimated remaining: %.1f minutes\n",
-              elapsed, (elapsed/i) * (h - i)))
+  est_remaining <- (elapsed / i) * (h - i) / 60  # in hours
+  cat(sprintf("Elapsed: %.1f minutes | Est. remaining: %.1f hours\n",
+              elapsed, est_remaining))
 }
 
-# ==== 4. RESULTS & METRICS ===================================================
+# ==== 4. RESULTS =============================================================
 res_dt <- data.table(interval = all_timestamps,
                      actual = all_actuals,
                      forecast = all_forecasts,
                      residual = all_residuals)
 
-# Calculate metrics
-MSE  <- mean((all_residuals)^2)
+MSE  <- mean(all_residuals^2)
 RMSE <- sqrt(MSE)
 MAE  <- mean(abs(all_residuals))
-MAPE <- mean(ifelse(abs(all_actuals) > 1e-8, 
-                    abs(all_residuals / all_actuals), 
-                    NA), 
-             na.rm = TRUE) * 100
+MAPE <- mean(abs(all_residuals / all_actuals), na.rm=TRUE) * 100
+
 cat(sprintf(
-  "\n==== ROLLING SARIMA FORECAST RESULTS ==== | MSE = %.2f | RMSE = %.2f | MAE = %.2f | MAPE = %.2f%% | Total time: %.1f minutes\n",
+  "\n==== ROLLING SARIMAX RESULTS (xreg = occupancy, co2, lag_24) ====\nMSE = %.2f | RMSE = %.2f | MAE = %.2f | MAPE = %.2f%% | Total time: %.1f minutes\n",
   MSE, RMSE, MAE, MAPE, as.numeric(Sys.time() - start_time, units = "mins")
 ))
 
-
-# ==== 5. Plot =================================================================
+# ==== 5. PLOT ================================================================
 ggplot(res_dt, aes(x = interval)) +
-  geom_line(aes(y = actual, colour = "Actual", linetype = "Actual"), size = 0.5) +
-  geom_line(aes(y = forecast, colour = "Forecast", linetype = "Forecast"), size = 0.6) +
-  labs(
-    title = "Rolling SARIMA Forecast vs Actuals",
-    subtitle = sprintf("Window: %d hours, Steps: %d hours", window_size, rolling_steps),
-    x = "Time", y = "kWh"
-  ) +
-  scale_colour_manual(
-    name = "Legend",
-    values = c("Actual" = "black", "Forecast" = "blue")
-  ) +
-  scale_linetype_manual(
-    name = "Legend",
-    values = c("Actual" = "solid", "Forecast" = "dashed")
-  ) +
+  geom_line(aes(y = actual, colour = "Actual"), linewidth = 0.4) +
+  geom_line(aes(y = forecast, colour = "Forecast"), linetype = "dashed", linewidth = 0.4) +
+  labs(title = "Rolling SARIMAX Forecast vs Actuals",
+       subtitle = "Window = expanding, Step = 24h",
+       x = "Time", y = "Consumption (kWh)") +
+  scale_colour_manual(values = c("Actual" = "black", "Forecast" = "blue")) +
   theme_minimal() +
   theme(legend.title = element_blank())
 # ==== 5. COMPREHENSIVE RESIDUAL ANALYSIS =====================================
@@ -180,6 +177,7 @@ p2 <- ggplot(res_dt, aes(x = residual)) +
                 color = "green", linetype = "dashed") +
   labs(title = "Residual Distribution", x = "Residual", y = "Density") +
   theme_minimal()
+
 
 # 6.3 Q-Q Plot
 p3 <- ggplot(res_dt, aes(sample = residual)) +
