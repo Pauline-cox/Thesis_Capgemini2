@@ -214,8 +214,6 @@ ggplot(res_dt, aes(x = interval)) +
   theme(legend.title = element_blank())
 
 # ==== 7b. RESIDUAL ANALYSIS ===================================================
-library(moments)
-library(tseries)
 
 cat("\n==== LSTM RESIDUAL ANALYSIS ====\n")
 
