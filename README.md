@@ -1,48 +1,63 @@
-# --- helpers (add once near the top) ---
-AICc_safe <- function(model){
-  n <- length(residuals(model)); k <- length(coef(model)) + 1
-  stats::AIC(model) + (2*k*(k+1)) / (n - k - 1)
-}
-`%||%` <- function(a,b) if (is.null(a)) b else a
-
-# --- your existing robust fitter should already be defined: fit_arima_robust(...) ---
-
-# --- patched comparison block ---
-res_list <- lapply(cands, function(sp) {
-  fit <- tryCatch(
-    fit_arima_robust(y_fit, sp$order, sp$seas, 168, include_mean = FALSE, verbose = FALSE),
-    error = function(e) NULL
-  )
-  if (is.null(fit)) {
-    return(data.frame(
-      label = sp$label, AIC=NA, AICc=NA, BIC=NA, sigma2=NA, loglik=NA,
-      converged = FALSE, stringsAsFactors = FALSE
-    ))
-  }
-  data.frame(
-    label   = sp$label,
-    AIC     = AIC(fit),
-    AICc    = AICc_safe(fit),   # <- use helper
-    BIC     = BIC(fit),
-    sigma2  = fit$sigma2,
-    loglik  = as.numeric(logLik(fit)),
-    converged = TRUE,
-    fit     = I(list(fit)),
-    stringsAsFactors = FALSE
-  )
+suppressPackageStartupMessages({
+  library(forecast)
 })
 
-tab <- do.call(rbind, res_list)
-tab_ok <- subset(tab, converged & is.finite(AICc))
-tab_ok <- tab_ok[order(tab_ok$AICc), ]
-
-cat("\n=== Candidate ranking (by AICc) ===\n")
-print(tab_ok[, c("label","AIC","AICc","BIC","sigma2","loglik")], row.names = FALSE)
-
-if (nrow(tab_ok)) {
-  best <- tab_ok$fit[[1]]
-  cat("\n=== Chosen model ===\n")
-  print(best)
+# --- 1) Target series (no xreg) ---------------------------------------------
+# Use model_data$y if you already built features; otherwise fall back to clean_data
+y_raw <- if (exists("model_data") && !is.null(model_data$y)) {
+  as.numeric(model_data$y)
 } else {
-  cat("\nNo models converged.\n")
+  as.numeric(clean_data$total_consumption_kWh)
 }
+
+# basic sanity
+y_raw <- y_raw[is.finite(y_raw)]
+stopifnot(length(y_raw) > 0)
+
+# Weekly seasonality
+m <- 168
+y_ts <- ts(y_raw, frequency = m)
+
+# --- 2) Auto ARIMA (fast) ----------------------------------------------------
+fit <- try(
+  auto.arima(
+    y_ts,
+    seasonal = TRUE, D = 1,        # weekly differencing
+    max.P = 2, max.Q = 2,          # small seasonal order bounds (speed)
+    max.p = 3, max.q = 3,          # small nonseasonal bounds
+    stationary = FALSE,
+    stepwise = TRUE, approximation = TRUE,  # fast path
+    method = "CSS",                # quick
+    allowdrift = FALSE, allowmean = FALSE
+  ),
+  silent = TRUE
+)
+
+# --- 3) Robust fallback if fast path fails -----------------------------------
+if (inherits(fit, "try-error")) {
+  fit <- auto.arima(
+    y_ts,
+    seasonal = TRUE, D = 1,
+    max.P = 2, max.Q = 2, max.p = 3, max.q = 3,
+    stationary = FALSE,
+    stepwise = FALSE, approximation = FALSE,  # more thorough
+    method = "CSS",                           # or "ML" if you prefer
+    allowdrift = FALSE, allowmean = FALSE
+  )
+}
+
+# --- 4) Summary + quick diagnostics ------------------------------------------
+print(summary(fit))
+
+# Residual checks
+e <- residuals(fit)
+lb <- Box.test(e, lag = 2*m, type = "Ljung-Box", fitdf = sum(!is.na(coef(fit))))
+cat(sprintf("Ljung-Box p (lag=%d): %.4f\n", 2*m, lb$p.value))
+cat(sprintf("Train RMSE: %.3f | MAE: %.3f\n", sqrt(mean(e^2)), mean(abs(e))))
+
+# --- 5) 24-hour forecast (no xreg needed) ------------------------------------
+h <- 24
+fc <- forecast(fit, h = h)
+print(fc)
+# If you want the vector:
+pred_24h <- as.numeric(fc$mean)
