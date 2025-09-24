@@ -1,63 +1,43 @@
-suppressPackageStartupMessages({
-  library(forecast)
-})
+suppressPackageStartupMessages({ library(forecast) })
 
-# --- 1) Target series (no xreg) ---------------------------------------------
-# Use model_data$y if you already built features; otherwise fall back to clean_data
+# --- 1) Target series (no xreg) ---
 y_raw <- if (exists("model_data") && !is.null(model_data$y)) {
   as.numeric(model_data$y)
 } else {
   as.numeric(clean_data$total_consumption_kWh)
 }
-
-# basic sanity
 y_raw <- y_raw[is.finite(y_raw)]
 stopifnot(length(y_raw) > 0)
 
-# Weekly seasonality
 m <- 168
 y_ts <- ts(y_raw, frequency = m)
 
-# --- 2) Auto ARIMA (fast) ----------------------------------------------------
-fit <- try(
-  auto.arima(
-    y_ts,
-    seasonal = TRUE, D = 1,        # weekly differencing
-    max.P = 2, max.Q = 2,          # small seasonal order bounds (speed)
-    max.p = 3, max.q = 3,          # small nonseasonal bounds
-    stationary = FALSE,
-    stepwise = TRUE, approximation = TRUE,  # fast path
-    method = "CSS",                # quick
-    allowdrift = FALSE, allowmean = FALSE
-  ),
-  silent = TRUE
-)
+# --- 2) Refit specified orders: ARIMA(3,0,1)(0,1,0)[168] ---
+fit_try <- function(method) try(Arima(
+  y_ts,
+  order = c(3,0,1),
+  seasonal = list(order = c(0,1,0), period = m),
+  method = method,
+  include.mean = FALSE,   # D=1 → no mean/intercept
+  optim.control = list(maxit = 1000)
+), silent = TRUE)
 
-# --- 3) Robust fallback if fast path fails -----------------------------------
-if (inherits(fit, "try-error")) {
-  fit <- auto.arima(
-    y_ts,
-    seasonal = TRUE, D = 1,
-    max.P = 2, max.Q = 2, max.p = 3, max.q = 3,
-    stationary = FALSE,
-    stepwise = FALSE, approximation = FALSE,  # more thorough
-    method = "CSS",                           # or "ML" if you prefer
-    allowdrift = FALSE, allowmean = FALSE
-  )
-}
+fit <- fit_try("CSS-ML")
+if (inherits(fit, "try-error")) fit <- fit_try("ML")
+if (inherits(fit, "try-error")) fit <- fit_try("CSS")
+if (inherits(fit, "try-error")) stop("Refit failed for all methods.")
 
-# --- 4) Summary + quick diagnostics ------------------------------------------
+cat("Fitted with method:", fit$method, "\n")
 print(summary(fit))
 
-# Residual checks
-e <- residuals(fit)
+# --- 3) Diagnostics ---
+e  <- residuals(fit)
 lb <- Box.test(e, lag = 2*m, type = "Ljung-Box", fitdf = sum(!is.na(coef(fit))))
 cat(sprintf("Ljung-Box p (lag=%d): %.4f\n", 2*m, lb$p.value))
 cat(sprintf("Train RMSE: %.3f | MAE: %.3f\n", sqrt(mean(e^2)), mean(abs(e))))
 
-# --- 5) 24-hour forecast (no xreg needed) ------------------------------------
-h <- 24
+# --- 4) 24-hour forecast (no xreg) ---
+h  <- 24
 fc <- forecast(fit, h = h)
 print(fc)
-# If you want the vector:
 pred_24h <- as.numeric(fc$mean)
